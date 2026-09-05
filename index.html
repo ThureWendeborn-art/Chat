@@ -660,6 +660,11 @@ const markets = {
 
 };
 
+/* Feste Ausgangspreise für einen echten Reset. */
+Object.keys(markets).forEach(key=>{
+    markets[key].startPrice = markets[key].price;
+});
+
 
 /* =========================
    ACCOUNT
@@ -703,6 +708,34 @@ const timeframeSizes = {
 
 
 const histories = {};
+const MARKET_DATA_KEY = "tradelab_marketdata_v2";
+
+/*
+   WICHTIG:
+   Die simulierten Kurse/Kerzen werden gespeichert.
+   Dadurch erzeugt ein Reload NICHT wieder einen komplett
+   neuen Markt.
+*/
+
+function saveMarketData(){
+
+    const snapshot = {};
+
+    Object.keys(markets).forEach(key=>{
+
+        snapshot[key] = {
+            price: markets[key].price,
+            candles: histories[key] || []
+        };
+
+    });
+
+    localStorage.setItem(
+        MARKET_DATA_KEY,
+        JSON.stringify(snapshot)
+    );
+
+}
 
 
 function createHistory(key){
@@ -712,11 +745,6 @@ function createHistory(key){
     let p = m.price;
 
     const data = [];
-
-    /*
-       Wir erzeugen 2000 simulierte
-       1-Minuten-Kerzen.
-    */
 
     for(let i=0;i<2000;i++){
 
@@ -753,12 +781,58 @@ function createHistory(key){
     }
 
     m.price = p;
-
     histories[key] = data;
+
 }
 
 
-Object.keys(markets).forEach(createHistory);
+function loadMarketData(){
+
+    let savedMarkets = null;
+
+    try{
+        savedMarkets =
+            JSON.parse(
+                localStorage.getItem(MARKET_DATA_KEY) || "null"
+            );
+    }catch(e){
+        savedMarkets = null;
+    }
+
+    Object.keys(markets).forEach(key=>{
+
+        const savedMarket =
+            savedMarkets && savedMarkets[key];
+
+        if(
+            savedMarket &&
+            Array.isArray(savedMarket.candles) &&
+            savedMarket.candles.length > 0
+        ){
+
+            histories[key] = savedMarket.candles;
+
+            const last =
+                histories[key][histories[key].length-1];
+
+            if(last && Number.isFinite(Number(last.close))){
+                markets[key].price = Number(last.close);
+            }else{
+                markets[key].price = Number(savedMarket.price) || markets[key].price;
+            }
+
+        }else{
+
+            createHistory(key);
+
+        }
+
+    });
+
+}
+
+
+loadMarketData();
 
 
 /* =========================
@@ -2428,6 +2502,7 @@ function updatePrices(){
     checkLiquidations();
 
     save();
+    saveMarketData();
 
     updateTradePage();
 
@@ -2503,6 +2578,28 @@ function resetAccount(){
     };
 
     save();
+
+    const player = getPlayer();
+    player.points = 0;
+    savePlayer(player);
+    syncPlayer();
+
+    /*
+       Beim vollständigen Account-Reset werden auch die
+       gespeicherten simulierten Kurse zurückgesetzt.
+    */
+    localStorage.removeItem(MARKET_DATA_KEY);
+
+    Object.keys(histories).forEach(key=>{
+        delete histories[key];
+    });
+
+    Object.keys(markets).forEach(key=>{
+        markets[key].price = Number(markets[key].startPrice || markets[key].price);
+    });
+
+    Object.keys(markets).forEach(createHistory);
+    saveMarketData();
 
     notify(
         "Account zurückgesetzt."
@@ -2609,6 +2706,13 @@ function openPlayerPanel(){
           <div class="player-stat">Lernpunkte<b>${Number(player.points||0)}</b></div>
         </div>
 
+        <h3>🌐 Online-Rangliste verbinden</h3>
+        <div class="player-row">
+          <input id="supabaseUrlInput" value="${escapeHtml(SUPABASE_URL)}" placeholder="Supabase Project URL">
+          <input id="supabaseKeyInput" value="${escapeHtml(SUPABASE_KEY)}" placeholder="Publishable/Anon Key">
+          <button class="player-btn" onclick="saveSupabaseSettings()">Verbinden</button>
+        </div>
+
         <h3>🏆 Lern-Rangliste</h3>
         <div class="leaderboard">
           <div class="lb-row lb-head"><span>#</span><span>Spieler</span><span>Punkte</span></div>
@@ -2664,73 +2768,179 @@ function escapeHtml(value){
   4. Configure RLS so players may read the leaderboard and update only their
      own row. Never put a Supabase service-role/secret key into this file.
 */
-const SUPABASE_URL = "";
-const SUPABASE_KEY = "";
+let SUPABASE_URL = localStorage.getItem("tradelab_supabase_url") || "";
+let SUPABASE_KEY = localStorage.getItem("tradelab_supabase_key") || "";
+
+function saveSupabaseSettings(){
+    SUPABASE_URL =
+        (document.getElementById("supabaseUrlInput")?.value || "").trim();
+
+    SUPABASE_KEY =
+        (document.getElementById("supabaseKeyInput")?.value || "").trim();
+
+    localStorage.setItem("tradelab_supabase_url", SUPABASE_URL);
+    localStorage.setItem("tradelab_supabase_key", SUPABASE_KEY);
+
+    notify(
+        SUPABASE_URL && SUPABASE_KEY
+        ? "Online-Rangliste konfiguriert."
+        : "Online-Rangliste deaktiviert."
+    );
+
+    openPlayerPanel();
+}
 
 async function supabaseClient(){
-    if(!SUPABASE_URL || !SUPABASE_KEY) return null;
-    if(!window.supabase){
-        await new Promise((resolve,reject)=>{
-            const s=document.createElement("script");
-            s.src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-            s.onload=resolve; s.onerror=reject;
-            document.head.appendChild(s);
-        }).catch(()=>null);
+
+    if(!SUPABASE_URL || !SUPABASE_KEY){
+        return null;
     }
-    if(!window.supabase) return null;
-    return window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+
+    if(!window.supabase){
+
+        await new Promise((resolve,reject)=>{
+
+            const s =
+                document.createElement("script");
+
+            s.src =
+                "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+
+            s.onload = resolve;
+            s.onerror = reject;
+
+            document.head.appendChild(s);
+
+        }).catch(()=>null);
+
+    }
+
+    if(!window.supabase){
+        return null;
+    }
+
+    return window.supabase.createClient(
+        SUPABASE_URL,
+        SUPABASE_KEY
+    );
+
 }
+
 
 async function syncPlayer(){
-    const client = await supabaseClient();
-    if(!client) return;
 
-    const player = getPlayer();
-    await client.from("tradelab_players").upsert({
-        id:getPlayerId(),
-        name:player.name,
-        points:Number(player.points||0),
-        updated_at:new Date().toISOString()
-    });
-}
+    const client =
+        await supabaseClient();
 
-async function loadLeaderboard(){
-    const box = document.getElementById("leaderboardRows");
-    if(!box) return;
-
-    const client = await supabaseClient();
     if(!client){
-        const p = getPlayer();
-        box.innerHTML = `
-          <div class="lb-row"><span>1</span><span>${escapeHtml(p.name)}</span><span>${Number(p.points||0)}</span></div>
-        `;
         return;
     }
 
-    const {data,error} = await client
-      .from("tradelab_players")
-      .select("name,points")
-      .order("points",{ascending:false})
-      .limit(50);
+    const player =
+        getPlayer();
+
+    const {error} =
+        await client
+            .from("tradelab_players")
+            .upsert({
+                id:getPlayerId(),
+                name:player.name,
+                points:Number(player.points || 0),
+                updated_at:new Date().toISOString()
+            });
 
     if(error){
-        box.innerHTML = `<div class="lb-row"><span>–</span><span>Online-Rangliste konnte nicht geladen werden.</span><span>–</span></div>`;
+        console.warn("Leaderboard sync:",error.message);
+    }
+
+}
+
+
+async function loadLeaderboard(){
+
+    const box =
+        document.getElementById("leaderboardRows");
+
+    if(!box){
         return;
     }
 
-    box.innerHTML = (data||[]).map((p,i)=>`
-      <div class="lb-row">
-        <span>${i+1}</span>
-        <span>${escapeHtml(p.name)}</span>
-        <span>${Number(p.points||0)}</span>
-      </div>
-    `).join("") || `<div class="lb-row"><span>–</span><span>Noch keine Spieler</span><span>–</span></div>`;
+    const client =
+        await supabaseClient();
+
+    if(!client){
+
+        const p =
+            getPlayer();
+
+        box.innerHTML = `
+          <div class="lb-row">
+            <span>1</span>
+            <span>${escapeHtml(p.name)}</span>
+            <span>${Number(p.points || 0)}</span>
+          </div>
+        `;
+
+        return;
+
+    }
+
+    const result =
+        await client
+            .from("tradelab_players")
+            .select("name,points")
+            .order("points",{ascending:false})
+            .limit(50);
+
+    if(result.error){
+
+        box.innerHTML = `
+          <div class="lb-row">
+            <span>–</span>
+            <span>Rangliste nicht erreichbar. Prüfe Supabase/RLS.</span>
+            <span>–</span>
+          </div>
+        `;
+
+        return;
+
+    }
+
+    box.innerHTML =
+        (result.data || [])
+            .map((p,i)=>`
+              <div class="lb-row">
+                <span>${i+1}</span>
+                <span>${escapeHtml(p.name)}</span>
+                <span>${Number(p.points || 0)}</span>
+              </div>
+            `)
+            .join("")
+        ||
+        `
+          <div class="lb-row">
+            <span>–</span>
+            <span>Noch keine Spieler</span>
+            <span>–</span>
+          </div>
+        `;
+
 }
 
+
 function awardPracticePoint(){
+
+    /*
+       Ein abgeschlossener Übungstrade gibt genau einen
+       Lernpunkt. Der Punkt wird im Account gespeichert und
+       anschließend online synchronisiert.
+    */
+
     addLearningPoint();
     syncPlayer();
+
 }
+
 
 /* Ask for a name once when the simulator starts. */
 ensurePlayerName();
