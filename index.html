@@ -478,6 +478,52 @@ input,select{
     }
 }
 </style>
+
+<style id="player-system-css">
+.player-panel{
+    position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+}
+.player-card{
+    width:min(680px,100%); max-height:90vh; overflow:auto;
+    background:#111827; color:#fff; border:1px solid #334155;
+    border-radius:18px; padding:24px; box-shadow:0 20px 70px rgba(0,0,0,.45);
+}
+.player-card h2{margin:0 0 8px}
+.player-card p{color:#94a3b8}
+.player-row{display:flex;gap:10px;align-items:center;margin:14px 0}
+.player-row input{
+    flex:1; padding:11px 12px; border-radius:10px; border:1px solid #475569;
+    background:#0f172a; color:#fff;
+}
+.player-btn{
+    border:0; border-radius:10px; padding:11px 14px; cursor:pointer;
+    background:#2563eb; color:#fff; font-weight:700;
+}
+.player-btn.secondary{background:#334155}
+.player-stats{
+    display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:18px 0;
+}
+.player-stat{
+    background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:14px;
+}
+.player-stat b{display:block;font-size:20px;margin-top:4px}
+.leaderboard{
+    margin-top:18px; border:1px solid #1e293b; border-radius:12px; overflow:hidden;
+}
+.lb-row{
+    display:grid; grid-template-columns:45px 1fr 100px; gap:10px;
+    padding:11px 14px; border-top:1px solid #1e293b;
+}
+.lb-row:first-child{border-top:0}
+.lb-head{background:#0f172a;color:#94a3b8;font-size:12px}
+.player-note{font-size:12px;color:#64748b!important}
+@media(max-width:600px){
+    .player-row{flex-direction:column;align-items:stretch}
+    .player-stats{grid-template-columns:1fr}
+}
+</style>
+
 </head>
 
 <body>
@@ -2161,6 +2207,8 @@ function updateDashboardLive(){
 ========================= */
 
 function closePosition(index){
+    awardPracticePoint();
+
 
     const p =
         state.positions[index];
@@ -2490,6 +2538,202 @@ window.addEventListener(
         }
     }
 );
+
+
+
+/* =========================
+   PLAYER ACCOUNT / LEARNING SCORE
+   ========================= */
+
+const PLAYER_KEY = "tradelab_player";
+const PLAYER_ID_KEY = "tradelab_player_id";
+
+function getPlayerId(){
+    let id = localStorage.getItem(PLAYER_ID_KEY);
+    if(!id){
+        id = (crypto && crypto.randomUUID) ? crypto.randomUUID() :
+             "p_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+        localStorage.setItem(PLAYER_ID_KEY,id);
+    }
+    return id;
+}
+
+function getPlayer(){
+    const fallback = {name:"Spieler", points:0};
+    try{
+        return {...fallback,...JSON.parse(localStorage.getItem(PLAYER_KEY)||"{}")};
+    }catch(e){ return fallback; }
+}
+
+function savePlayer(player){
+    localStorage.setItem(PLAYER_KEY,JSON.stringify(player));
+}
+
+function addLearningPoint(){
+    const player = getPlayer();
+    player.points = Number(player.points||0) + 1;
+    savePlayer(player);
+}
+
+function ensurePlayerName(){
+    const player = getPlayer();
+    if(!localStorage.getItem(PLAYER_KEY) || !player.name || player.name==="Spieler"){
+        const name = prompt("Wie soll dein Spielername heißen?");
+        if(name && name.trim()){
+            player.name = name.trim().slice(0,24);
+            savePlayer(player);
+        }
+    }
+}
+
+function openPlayerPanel(){
+    document.getElementById("playerPanel")?.remove();
+
+    const player = getPlayer();
+    const panel = document.createElement("div");
+    panel.className = "player-panel";
+    panel.id = "playerPanel";
+    panel.innerHTML = `
+      <div class="player-card">
+        <h2>👤 Account & Lernscore</h2>
+        <p>Dein Fortschritt wird auf diesem Gerät gespeichert. Der Score misst Übungsaktivität, nicht Geldgewinne.</p>
+
+        <div class="player-row">
+          <input id="playerNameInput" maxlength="24" value="${escapeHtml(player.name)}" placeholder="Spielername">
+          <button class="player-btn" onclick="savePlayerName()">Speichern</button>
+          <button class="player-btn secondary" onclick="closePlayerPanel()">Schließen</button>
+        </div>
+
+        <div class="player-stats">
+          <div class="player-stat">Spieler<b>${escapeHtml(player.name)}</b></div>
+          <div class="player-stat">Lernpunkte<b>${Number(player.points||0)}</b></div>
+        </div>
+
+        <h3>🏆 Lern-Rangliste</h3>
+        <div class="leaderboard">
+          <div class="lb-row lb-head"><span>#</span><span>Spieler</span><span>Punkte</span></div>
+          <div id="leaderboardRows">
+            <div class="lb-row"><span>–</span><span>Lade Rangliste …</span><span>–</span></div>
+          </div>
+        </div>
+        <p class="player-note">Für eine echte Online-Rangliste muss unten im Code ein Supabase-Projekt eingetragen werden. Ohne Konfiguration bleibt der Account lokal.</p>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    panel.addEventListener("click", e=>{
+        if(e.target===panel) closePlayerPanel();
+    });
+
+    loadLeaderboard();
+}
+
+function closePlayerPanel(){
+    document.getElementById("playerPanel")?.remove();
+}
+
+function savePlayerName(){
+    const input = document.getElementById("playerNameInput");
+    const name = (input?.value||"").trim();
+    if(!name) return;
+    const player = getPlayer();
+    player.name = name.slice(0,24);
+    savePlayer(player);
+    notify("Spielername gespeichert.");
+    openPlayerPanel();
+}
+
+function escapeHtml(value){
+    return String(value??"")
+      .replaceAll("&","&amp;").replaceAll("<","&lt;")
+      .replaceAll(">","&gt;").replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+}
+
+/*
+  OPTIONAL ONLINE LEADERBOARD
+  1. Create a Supabase project.
+  2. Create table:
+     create table public.tradelab_players (
+       id text primary key,
+       name text not null,
+       points integer not null default 0,
+       updated_at timestamptz not null default now()
+     );
+  3. Put your project URL + publishable/anon key here.
+  4. Configure RLS so players may read the leaderboard and update only their
+     own row. Never put a Supabase service-role/secret key into this file.
+*/
+const SUPABASE_URL = "";
+const SUPABASE_KEY = "";
+
+async function supabaseClient(){
+    if(!SUPABASE_URL || !SUPABASE_KEY) return null;
+    if(!window.supabase){
+        await new Promise((resolve,reject)=>{
+            const s=document.createElement("script");
+            s.src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+            s.onload=resolve; s.onerror=reject;
+            document.head.appendChild(s);
+        }).catch(()=>null);
+    }
+    if(!window.supabase) return null;
+    return window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+}
+
+async function syncPlayer(){
+    const client = await supabaseClient();
+    if(!client) return;
+
+    const player = getPlayer();
+    await client.from("tradelab_players").upsert({
+        id:getPlayerId(),
+        name:player.name,
+        points:Number(player.points||0),
+        updated_at:new Date().toISOString()
+    });
+}
+
+async function loadLeaderboard(){
+    const box = document.getElementById("leaderboardRows");
+    if(!box) return;
+
+    const client = await supabaseClient();
+    if(!client){
+        const p = getPlayer();
+        box.innerHTML = `
+          <div class="lb-row"><span>1</span><span>${escapeHtml(p.name)}</span><span>${Number(p.points||0)}</span></div>
+        `;
+        return;
+    }
+
+    const {data,error} = await client
+      .from("tradelab_players")
+      .select("name,points")
+      .order("points",{ascending:false})
+      .limit(50);
+
+    if(error){
+        box.innerHTML = `<div class="lb-row"><span>–</span><span>Online-Rangliste konnte nicht geladen werden.</span><span>–</span></div>`;
+        return;
+    }
+
+    box.innerHTML = (data||[]).map((p,i)=>`
+      <div class="lb-row">
+        <span>${i+1}</span>
+        <span>${escapeHtml(p.name)}</span>
+        <span>${Number(p.points||0)}</span>
+      </div>
+    `).join("") || `<div class="lb-row"><span>–</span><span>Noch keine Spieler</span><span>–</span></div>`;
+}
+
+function awardPracticePoint(){
+    addLearningPoint();
+    syncPlayer();
+}
+
+/* Ask for a name once when the simulator starts. */
+ensurePlayerName();
 
 
 /* =========================
